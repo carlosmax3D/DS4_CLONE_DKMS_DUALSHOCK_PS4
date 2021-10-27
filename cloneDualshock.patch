@@ -1,0 +1,47 @@
+--- hid-sony.c.	2020-10-30 16:55:38.255114700 -0600
++++ hid-sony.c	2020-10-30 17:03:10.112308500 -0600
+@@ -2084,6 +2084,7 @@
+ 	struct sixaxis_output_report *report =
+ 		(struct sixaxis_output_report *)sc->output_report_dmabuf;
+ 	int n;
++    int ret;
+ 
+ 	/* Initialize the report with default values */
+ 	memcpy(report, &default_report, sizeof(struct sixaxis_output_report));
+@@ -2122,10 +2123,20 @@
+ 	if (sc->quirks & SHANWAN_GAMEPAD)
+ 		hid_hw_output_report(sc->hdev, (u8 *)report,
+ 				sizeof(struct sixaxis_output_report));
+-	else
+-		hid_hw_raw_request(sc->hdev, report->report_id, (u8 *)report,
++	else {
++        /*
++         * Gasia controller workaround
++    	 * See: https://bugzilla.kernel.org/show_bug.cgi?id=200009
++    	 */
++		ret = hid_hw_raw_request(sc->hdev, report->report_id, (u8 *)report,
+ 				sizeof(struct sixaxis_output_report),
+ 				HID_OUTPUT_REPORT, HID_REQ_SET_REPORT);
++        if (ret < 0) {
++            hid_err(sc->hdev, "failed to send raw request, attempting fallback\n");
++            hid_hw_output_report(sc->hdev, (u8 *)report,
++                            sizeof(struct sixaxis_output_report));            
++        }
++    }
+ }
+ 
+ static void dualshock4_send_output_report(struct sony_sc *sc)
+@@ -2483,10 +2494,10 @@
+ 		 * retrieved with feature report 0x81. The address begins at
+ 		 * offset 1.
+ 		 */
+-		ret = hid_hw_raw_request(sc->hdev, 0x81, buf,
++		/*ret = hid_hw_raw_request(sc->hdev, 0x81, buf,
+ 				DS4_FEATURE_REPORT_0x81_SIZE, HID_FEATURE_REPORT,
+-				HID_REQ_GET_REPORT);
+-
++				HID_REQ_GET_REPORT);*/
++        ret = DS4_FEATURE_REPORT_0x81_SIZE;
+ 		if (ret != DS4_FEATURE_REPORT_0x81_SIZE) {
+ 			hid_err(sc->hdev, "failed to retrieve feature report 0x81 with the DualShock 4 MAC address\n");
+ 			ret = ret < 0 ? ret : -EINVAL;
