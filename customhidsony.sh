@@ -29,6 +29,7 @@ if [ ${OS_VER} = "Fedora" ]; then
 	cp linux.src/drivers/hid/*sony* ./module
 	cp linux.src/drivers/hid/*ids* ./module
 	rm -rf linux.src
+	rm -rf linux-*
 else
 	echo "Downloading the kernel source package"
 	sudo apt-get -y install dpkg-dev

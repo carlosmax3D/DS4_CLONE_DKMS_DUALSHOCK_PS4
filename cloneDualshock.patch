@@ -1,47 +1,141 @@
---- hid-sony.c.	2020-10-30 16:55:38.255114700 -0600
-+++ hid-sony.c	2020-10-30 17:03:10.112308500 -0600
-@@ -2084,6 +2084,7 @@
+--- hid-sony.c	2022-04-25 23:41:31.238266200 -0500
++++ hid-sony_patched.c	2022-04-26 00:15:23.540036800 -0500
+@@ -509,6 +509,7 @@
+ #define DS4_INPUT_REPORT_0x11_SIZE 78
+ #define DS4_OUTPUT_REPORT_0x05_SIZE 32
+ #define DS4_OUTPUT_REPORT_0x11_SIZE 78
++#define DS4_FEATURE_REPORT_0x12_SIZE 16
+ #define SIXAXIS_REPORT_0xF2_SIZE 17
+ #define SIXAXIS_REPORT_0xF5_SIZE 8
+ #define MOTION_REPORT_0x02_SIZE 49
+@@ -2229,6 +2230,7 @@
  	struct sixaxis_output_report *report =
  		(struct sixaxis_output_report *)sc->output_report_dmabuf;
  	int n;
-+    int ret;
++	int ret;
  
  	/* Initialize the report with default values */
  	memcpy(report, &default_report, sizeof(struct sixaxis_output_report));
-@@ -2122,10 +2123,20 @@
+@@ -2267,10 +2269,20 @@
  	if (sc->quirks & SHANWAN_GAMEPAD)
  		hid_hw_output_report(sc->hdev, (u8 *)report,
  				sizeof(struct sixaxis_output_report));
 -	else
 -		hid_hw_raw_request(sc->hdev, report->report_id, (u8 *)report,
 +	else {
-+        /*
-+         * Gasia controller workaround
-+    	 * See: https://bugzilla.kernel.org/show_bug.cgi?id=200009
-+    	 */
++		/*
++		 * Gasia controller workaround
++		 * See: https://bugzilla.kernel.org/show_bug.cgi?id=200009
++		 */
 +		ret = hid_hw_raw_request(sc->hdev, report->report_id, (u8 *)report,
  				sizeof(struct sixaxis_output_report),
  				HID_OUTPUT_REPORT, HID_REQ_SET_REPORT);
-+        if (ret < 0) {
-+            hid_err(sc->hdev, "failed to send raw request, attempting fallback\n");
-+            hid_hw_output_report(sc->hdev, (u8 *)report,
-+                            sizeof(struct sixaxis_output_report));            
-+        }
-+    }
++		if (ret < 0) {
++				hid_err(sc->hdev, "failed to send raw request, attempting fallback\n");
++				hid_hw_output_report(sc->hdev, (u8 *)report,
++						sizeof(struct sixaxis_output_report));            
++		}
++	}
  }
  
  static void dualshock4_send_output_report(struct sony_sc *sc)
-@@ -2483,10 +2494,10 @@
+@@ -2593,6 +2605,53 @@
+ 	return 0;
+ }
+ 
++static int sony_get_usb_ds4_devaddr(struct sony_sc *sc)
++{
++	u8 *buf = NULL;
++	int ret;
++
++	buf = kmalloc(max(DS4_FEATURE_REPORT_0x12_SIZE, DS4_FEATURE_REPORT_0x81_SIZE), GFP_KERNEL);
++	if (!buf)
++		return -ENOMEM;
++
++	/*
++	 * The MAC address of a DS4 controller connected via USB can be
++	 * retrieved with feature report 0x81. The address begins at
++	 * offset 1.
++	 */
++	ret = hid_hw_raw_request(sc->hdev, 0x81, buf,
++			DS4_FEATURE_REPORT_0x81_SIZE, HID_FEATURE_REPORT,
++			HID_REQ_GET_REPORT);
++	if (ret == DS4_FEATURE_REPORT_0x81_SIZE) {
++		memcpy(sc->mac_address, &buf[1], sizeof(sc->mac_address));
++		goto out_free;
++	}
++	dbg_hid("%s: hid_hw_raw_request(..., 0x81, ...) returned %d\n", __func__, ret);
++
++	/*
++	 * Some variants do not implement feature report 0x81 at all.
++	 * Fortunately, feature report 0x12 also contains the MAC address of
++	 * a controller.
++	 */
++	ret = hid_hw_raw_request(sc->hdev, 0x12, buf,
++			DS4_FEATURE_REPORT_0x12_SIZE, HID_FEATURE_REPORT,
++			HID_REQ_GET_REPORT);
++	if (ret == DS4_FEATURE_REPORT_0x12_SIZE) {
++		memcpy(sc->mac_address, &buf[1], sizeof(sc->mac_address));
++		goto out_free;
++	}
++	dbg_hid("%s: hid_hw_raw_request(..., 0x12, ...) returned %d\n", __func__, ret);
++
++	hid_err(sc->hdev, "failed to retrieve feature reports 0x81 and 0x12 with the DualShock 4 MAC address forcing MACAdress\n");
++	ret = ret < 0 ? ret : -EINVAL;
++	ret = DS4_FEATURE_REPORT_0x81_SIZE;
++out_free:
++
++	kfree(buf);
++
++	return ret;
++}
++
+ static int sony_check_add(struct sony_sc *sc)
+ {
+ 	u8 *buf = NULL;
+@@ -2613,7 +2672,7 @@
+ 			return 0;
+ 		}
+ 	} else if (sc->quirks & (DUALSHOCK4_CONTROLLER_USB | DUALSHOCK4_DONGLE)) {
+-		buf = kmalloc(DS4_FEATURE_REPORT_0x81_SIZE, GFP_KERNEL);
++/*		buf = kmalloc(DS4_FEATURE_REPORT_0x81_SIZE, GFP_KERNEL);
+ 		if (!buf)
+ 			return -ENOMEM;
+ 
+@@ -2621,7 +2680,7 @@
+ 		 * The MAC address of a DS4 controller connected via USB can be
  		 * retrieved with feature report 0x81. The address begins at
  		 * offset 1.
- 		 */
--		ret = hid_hw_raw_request(sc->hdev, 0x81, buf,
-+		/*ret = hid_hw_raw_request(sc->hdev, 0x81, buf,
+-		 */
++		 * /
+ 		ret = hid_hw_raw_request(sc->hdev, 0x81, buf,
  				DS4_FEATURE_REPORT_0x81_SIZE, HID_FEATURE_REPORT,
--				HID_REQ_GET_REPORT);
+ 				HID_REQ_GET_REPORT);
+@@ -2632,10 +2691,17 @@
+ 			goto out_free;
+ 		}
+ 
+-		memcpy(sc->mac_address, &buf[1], sizeof(sc->mac_address));
++		memcpy(sc->mac_address, &buf[1], sizeof(sc->mac_address));*/
+ 
++		ret = sony_get_usb_ds4_devaddr(sc);
++			
++		if (ret < 0){
++			
++			return ret;
++		}
+ 		snprintf(sc->hdev->uniq, sizeof(sc->hdev->uniq),
+ 			 "%pMR", sc->mac_address);
++		
+ 	} else if ((sc->quirks & SIXAXIS_CONTROLLER_USB) ||
+ 			(sc->quirks & NAVIGATION_CONTROLLER_USB)) {
+ 		buf = kmalloc(SIXAXIS_REPORT_0xF2_SIZE, GFP_KERNEL);
+@@ -2669,7 +2735,7 @@
+ 	} else {
+ 		return 0;
+ 	}
 -
-+				HID_REQ_GET_REPORT);*/
-+        ret = DS4_FEATURE_REPORT_0x81_SIZE;
- 		if (ret != DS4_FEATURE_REPORT_0x81_SIZE) {
- 			hid_err(sc->hdev, "failed to retrieve feature report 0x81 with the DualShock 4 MAC address\n");
- 			ret = ret < 0 ? ret : -EINVAL;
++	dbg_hid("%s: retrieved MAC address: %s\n", __func__, sc->hdev->uniq);
+ 	ret = sony_check_add_dev_list(sc);
+ 
+ out_free:
